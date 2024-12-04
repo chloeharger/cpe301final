@@ -22,6 +22,21 @@ dht DHT;
 const int RS = 12, EN = 13, D4 = 2, D5 = 3, D6 = 4, D7 = 5;
 LiquidCrystal lcd(RS, EN, D4, D5, D6, D7);
 
+// Water Sensor Setup:
+volatile unsigned char *portH = (unsigned char *)0x102; //power pin is PH5
+volatile unsigned char *ddrH = (unsigned char *)0x101;
+volatile unsigned char *pinH = (unsigned char *)0x100;
+#define WATER_SIGNAL A5
+int waterSensorVal = 0;
+
+// Stepper Motor Setup (for vent)
+#include <Stepper.h>
+const int stepsPerRev = 1500;
+Stepper myStep = Stepper(stepsPerRev, 41, 45, 43, 47);
+volatile unsigned char *portF = (unsigned char *)0x31; //using pins A0 and A1
+volatile unsigned char *ddrF = (unsigned char *)0x30;
+volatile unsigned char *pinF = (unsigned char *)0x2F;
+
 // Setup for using millis()
 unsigned long int previousMillis=0;
 const long int interval = 1000;
@@ -35,25 +50,73 @@ void setup(){
     U0init(9600);
     lcd.begin(16, 2);
     rtc.begin();
+    rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+
+    //water sensor:
+    *ddrH |= 0b00100000; //set PH5 to output
+    *portH &= 0b11011111; //set PH5 to low
+
+    //buttons to control stepper
+    *ddrF &= 0b11111100;
+    *portF |= 0b00000011;
+    
 }
 
 void loop(){
-  
-    //Display temp and humidity levels
     unsigned long currentMillis = millis();
+    unsigned long previousMillis2=0;
 
     if(currentMillis - previousMillis >= interval){
         previousMillis = currentMillis;
         
+        //Display temp and humidity levels:
         int chk = DHT.read11(DHT11_PIN);
         lcd.setCursor(0,0);
-        lcd.print("Temp=");
-        lcd.setCursor(7, 0);
+        lcd.print("Temp: ");
         lcd.print(DHT.temperature);
+        lcd.print((char)223);
+        lcd.print("C");
         lcd.setCursor(0,1);
-        lcd.print("Humidity=");
-        lcd.setCursor(9, 1);
+        lcd.print("Humidity: ");
         lcd.print(DHT.humidity);
+        lcd.print("%");
+
+        //Read Water Sensor Values:
+        *portH |= 0b00100000; //turn on sensor
+        if(currentMillis - previousMillis2 >= 10){
+          previousMillis2 = currentMillis;
+          waterSensorVal = analogRead(WATER_SIGNAL);
+          U0putchar('S');
+          U0putchar('e');
+          U0putchar('n');
+          U0putchar('s');
+          U0putchar('o');
+          U0putchar('r');
+          U0putchar(' ');
+          U0putchar('V');
+          U0putchar('a');
+          U0putchar('l');
+          U0putchar(':');
+          char first = waterSensorVal/100 + '0';
+          char second = waterSensorVal/10 + '0';
+          char third = waterSensorVal%10 + '0';
+          if(second>'9'){
+            second = second-9;
+          }
+          U0putchar(' ');
+          U0putchar(first);
+          U0putchar(second);
+          U0putchar(third);
+          U0putchar('\n');
+        }
+    }
+    //Move vent when button pressed:
+    myStep.setSpeed(5);
+    if(*pinF & 0b00000010){
+      myStep.step(stepsPerRev);
+    }
+    if(*pinF & 0b00000001){
+      myStep.step(-stepsPerRev);
     }
 }
 
@@ -79,8 +142,6 @@ void U0putchar(unsigned char U0pdata){
 }
 
 //(can delete these comments once code is started)
-// Set up water sensor
-
 // Fan motor (based on temperature levels)
 // Set up stepper motor for vent
 // On/off button
@@ -88,6 +149,7 @@ void U0putchar(unsigned char U0pdata){
 // Set date+time when system turns on or off:
 void displayClock(){
     DateTime now = rtc.now();
+    
     Serial.print(now.year(), DEC);
     Serial.print('/');
     Serial.print(now.month(), DEC);
