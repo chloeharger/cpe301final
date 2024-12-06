@@ -31,11 +31,16 @@ int waterSensorVal = 0;
 
 // Stepper Motor Setup (for vent)
 #include <Stepper.h>
-const int stepsPerRev = 1500;
+const int stepsPerRev = 2038;
 Stepper myStep = Stepper(stepsPerRev, 41, 45, 43, 47);
 volatile unsigned char *portF = (unsigned char *)0x31; //using pins A0 and A1
 volatile unsigned char *ddrF = (unsigned char *)0x30;
 volatile unsigned char *pinF = (unsigned char *)0x2F;
+
+// Fan Motor Setup
+volatile unsigned char *portA = (unsigned char *)0x22;
+volatile unsigned char *ddrA = (unsigned char *)0x21;
+volatile unsigned char *pinA = (unsigned char *)0x20;
 
 // Setup for using millis()
 unsigned long int previousMillis=0;
@@ -45,6 +50,18 @@ const long int interval = 1000;
 #include <RTClib.h>
 RTC_DS3231 rtc;
 char daysOfTheWeek[7][12] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
+
+// Setup for LED (R = 11(PB5), G = 10(PB4), B = 9(PH6))
+volatile unsigned char *portB = (unsigned char *)0x25;
+volatile unsigned char *ddrB = (unsigned char *)0x24;
+volatile unsigned char *pinB = (unsigned char *)0x23;
+#define RED 11
+#define BLUE 9
+#define GREEN 10
+
+// Misc ISR state setup
+#define MAX_TEMP 21
+bool tooHot = false;//change
 
 void setup(){
     U0init(9600);
@@ -58,8 +75,14 @@ void setup(){
 
     //buttons to control stepper
     *ddrF &= 0b11111100;
-    *portF |= 0b00000011;
+    *portF &= 0b11111100;
+
+    //fan motor
+    *ddrA |= 0b00101010; //PA1, PA3, PA5 outputs
     
+    //LED
+    *ddrB |= 0b00110000;
+    *ddrH |= 0b01000000;
 }
 
 void loop(){
@@ -80,6 +103,9 @@ void loop(){
         lcd.print("Humidity: ");
         lcd.print(DHT.humidity);
         lcd.print("%");
+        if(DHT.temperature > MAX_TEMP){
+          tooHot = true;//change
+        }
 
         //Read Water Sensor Values:
         *portH |= 0b00100000; //turn on sensor
@@ -111,7 +137,7 @@ void loop(){
         }
     }
     //Move vent when button pressed:
-    myStep.setSpeed(5);
+    myStep.setSpeed(10);
     if(*pinF & 0b00000010){
       myStep.step(stepsPerRev);
     }
@@ -143,8 +169,15 @@ void U0putchar(unsigned char U0pdata){
 
 //(can delete these comments once code is started)
 // Fan motor (based on temperature levels)
-// Set up stepper motor for vent
+
 // On/off button
+ISR(//use isr macro from slides){
+  while(DHT.temperature > MAX_TEMP){
+    *portA &= 0b11110111;
+    *portA |= 0b00010000;
+    analogWrite(23, 255);
+  }
+}
 
 // Set date+time when system turns on or off:
 void displayClock(){
