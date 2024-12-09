@@ -180,7 +180,7 @@ ISR(//use isr macro from slides){
 }
 
 // Set date+time when system turns on or off:
-void displayClock(){
+void displayClock(){ //either modify to remove serial calls, or don't use in interrupt
     DateTime now = rtc.now();
     
     Serial.print(now.year(), DEC);
