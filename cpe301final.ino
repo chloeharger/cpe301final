@@ -118,7 +118,8 @@ void loop(){
         lcd.print("Humidity: ");
         lcd.print(DHT.humidity);
         lcd.print("%");
-        if(tooHot){
+
+        if(tooHot==true){
           startFan();
           blueLED();
         }else{
@@ -187,18 +188,19 @@ void loop(){
     if(*pinF & 0b10000000){
       bool on = false;
       while(!on){
-        stateChange = true;
-        yellowLED();
-        lcd.clear();
-        lcd.setCursor(0,0);
-        lcd.print("System Off");
-        delay(500);
-        //off until button pressed again:
-        if(*pinF & 0b01000000){
-          on = true;
+          stateChange = true;
+          yellowLED();
+          lcd.clear();
+          lcd.setCursor(0,0);
+          lcd.print("System Off");
+          delay(500);
+          //off until button pressed again:
+          if(*pinF & 0b01000000){
+            on = true;
+          }
         }
       }
-    }
+    
 }
 
 //UART Functions:
@@ -285,3 +287,4 @@ void blueLED(){
   analogWrite(BLUE, 255);
   analogWrite(GREEN, 0);
 }
+
