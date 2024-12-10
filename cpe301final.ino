@@ -15,7 +15,7 @@ CPE 301 Final Project main code file
 // Temp/Humidity Sensor Setup:
 #include <dht.h>
 dht DHT;
-#define DHT11_PIN 7
+#define DHT11_PIN 18
 
 // LCD Display Setup:
 #include <LiquidCrystal.h>
@@ -28,6 +28,7 @@ volatile unsigned char *ddrH = (unsigned char *)0x101;
 volatile unsigned char *pinH = (unsigned char *)0x100;
 #define WATER_SIGNAL A5
 int waterSensorVal = 0;
+#define MIN_LEVEL 100
 
 // Stepper Motor Setup (for vent)
 #include <Stepper.h>
@@ -41,6 +42,7 @@ volatile unsigned char *pinF = (unsigned char *)0x2F;
 volatile unsigned char *portA = (unsigned char *)0x22;
 volatile unsigned char *ddrA = (unsigned char *)0x21;
 volatile unsigned char *pinA = (unsigned char *)0x20;
+#define SPEEDPIN 6
 
 // Setup for using millis()
 unsigned long int previousMillis=0;
@@ -50,6 +52,7 @@ const long int interval = 1000;
 #include <RTClib.h>
 RTC_DS3231 rtc;
 char daysOfTheWeek[7][12] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
+bool stateChange = false;
 
 // Setup for LED (R = 11(PB5), G = 10(PB4), B = 9(PH6))
 volatile unsigned char *portB = (unsigned char *)0x25;
@@ -60,8 +63,9 @@ volatile unsigned char *pinB = (unsigned char *)0x23;
 #define GREEN 10
 
 // Misc ISR state setup
-#define MAX_TEMP 21
-bool tooHot = false;//change
+#define MAX_TEMP 26
+bool tooHot = false;
+bool reset = false;
 
 void setup(){
     U0init(9600);
@@ -72,28 +76,39 @@ void setup(){
     //water sensor:
     *ddrH |= 0b00100000; //set PH5 to output
     *portH &= 0b11011111; //set PH5 to low
+    *ddrF &= 0b00010111; //set A5, A3, A6, A7 to input
 
     //buttons to control stepper
     *ddrF &= 0b11111100;
     *portF &= 0b11111100;
 
     //fan motor
-    *ddrA |= 0b00101010; //PA1, PA3, PA5 outputs
+    *ddrA |= 0b00101000; //PA3, PA5 outputs
+    *ddrH |= 0b00001000; //PH3 output
     
     //LED
     *ddrB |= 0b00110000;
     *ddrH |= 0b01000000;
+
+    //states:
+    attachInterrupt(digitalPinToInterrupt(18), fanState, CHANGE);
+    //water level error:
+    PCMSK2 |= bit (PCINT19);
+    PCIFR |= bit (PCIF2);
+    PCICR |= bit (PCIE2);
 }
 
 void loop(){
     unsigned long currentMillis = millis();
     unsigned long previousMillis2=0;
+    displayClock();
 
     if(currentMillis - previousMillis >= interval){
         previousMillis = currentMillis;
         
         //Display temp and humidity levels:
         int chk = DHT.read11(DHT11_PIN);
+        lcd.clear();
         lcd.setCursor(0,0);
         lcd.print("Temp: ");
         lcd.print(DHT.temperature);
@@ -103,8 +118,12 @@ void loop(){
         lcd.print("Humidity: ");
         lcd.print(DHT.humidity);
         lcd.print("%");
-        if(DHT.temperature > MAX_TEMP){
-          tooHot = true;//change
+        if(tooHot){
+          startFan();
+          blueLED();
+        }else{
+          stopFan();
+          greenLED();
         }
 
         //Read Water Sensor Values:
@@ -134,15 +153,51 @@ void loop(){
           U0putchar(second);
           U0putchar(third);
           U0putchar('\n');
+
+          if(waterSensorVal < MIN_LEVEL){
+            reset = false;
+            redLED();
+            stateChange = true;
+          
+            while(!reset){
+              lcd.clear();
+              lcd.setCursor(0,0);
+              lcd.print("ERROR: Water low");
+              lcd.setCursor(0,1);
+              lcd.print("Add water and reset");
+              if(*pinF & 0b00001000){
+                reset = true;
+              }
+            }
+          }
         }
     }
     //Move vent when button pressed:
     myStep.setSpeed(10);
     if(*pinF & 0b00000010){
       myStep.step(stepsPerRev);
+      stateChange = true;
     }
     if(*pinF & 0b00000001){
       myStep.step(-stepsPerRev);
+      stateChange = true;
+    }
+
+    //check for start/stop button to be pressed:
+    if(*pinF & 0b10000000){
+      bool on = false;
+      while(!on){
+        stateChange = true;
+        yellowLED();
+        lcd.clear();
+        lcd.setCursor(0,0);
+        lcd.print("System Off");
+        delay(500);
+        //off until button pressed again:
+        if(*pinF & 0b01000000){
+          on = true;
+        }
+      }
     }
 }
 
@@ -167,22 +222,30 @@ void U0putchar(unsigned char U0pdata){
     *myUDR0 = U0pdata;
 }
 
-//(can delete these comments once code is started)
-// Fan motor (based on temperature levels)
-
-// On/off button
-ISR(//use isr macro from slides){
-  while(DHT.temperature > MAX_TEMP){
+// fan motor/state:
+void startFan(){
     *portA &= 0b11110111;
-    *portA |= 0b00010000;
-    analogWrite(23, 255);
+    *portA |= 0b00100000;
+    analogWrite(SPEEDPIN, 255);
+}
+void stopFan(){
+    *portA &= 0b11011111;
+}
+void fanState(){
+  if(DHT.temperature > MAX_TEMP){
+    tooHot = true;
+    stateChange = true;
+  }else{
+    tooHot = false;
   }
 }
 
 // Set date+time when system turns on or off:
 void displayClock(){ //either modify to remove serial calls, or don't use in interrupt
+  if(stateChange){
     DateTime now = rtc.now();
     
+    Serial.print("State Change at ");
     Serial.print(now.year(), DEC);
     Serial.print('/');
     Serial.print(now.month(), DEC);
@@ -197,4 +260,28 @@ void displayClock(){ //either modify to remove serial calls, or don't use in int
     Serial.print(':');
     Serial.print(now.second(), DEC);
     Serial.println();
+
+    stateChange = false;
+  }
+}
+
+void redLED(){
+  analogWrite(RED, 255);
+  analogWrite(BLUE, 0);
+  analogWrite(GREEN, 0);
+}
+void yellowLED(){
+  analogWrite(RED, 180);
+  analogWrite(BLUE, 0);
+  analogWrite(GREEN, 150);
+}
+void greenLED(){
+  analogWrite(RED, 0);
+  analogWrite(BLUE, 0);
+  analogWrite(GREEN, 255);
+}
+void blueLED(){
+  analogWrite(RED, 0);
+  analogWrite(BLUE, 255);
+  analogWrite(GREEN, 0);
 }
