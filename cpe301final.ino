@@ -52,7 +52,7 @@ const long int interval = 1000;
 #include <RTClib.h>
 RTC_DS3231 rtc;
 char daysOfTheWeek[7][12] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
-bool stateChange = false;
+volatile bool stateChange = false;
 
 // Setup for LED (R = 11(PB5), G = 10(PB4), B = 9(PH6))
 volatile unsigned char *portB = (unsigned char *)0x25;
@@ -63,12 +63,14 @@ volatile unsigned char *pinB = (unsigned char *)0x23;
 #define GREEN 10
 
 // Misc ISR state setup
-#define MAX_TEMP 26
-bool tooHot = false;
-bool reset = false;
+#define MAX_TEMP 27
+volatile int t=0;
+volatile bool tooHot = false;
+volatile bool reset = false;
 
 void setup(){
     U0init(9600);
+    Serial.begin(9600);
     lcd.begin(16, 2);
     rtc.begin();
     rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
@@ -92,6 +94,7 @@ void setup(){
 
     //states:
     attachInterrupt(digitalPinToInterrupt(18), fanState, CHANGE);
+
     //water level error:
     PCMSK2 |= bit (PCINT19);
     PCIFR |= bit (PCIF2);
@@ -106,6 +109,7 @@ void loop(){
     if(currentMillis - previousMillis >= interval){
         previousMillis = currentMillis;
         
+        
         //Display temp and humidity levels:
         int chk = DHT.read11(DHT11_PIN);
         lcd.clear();
@@ -119,9 +123,13 @@ void loop(){
         lcd.print(DHT.humidity);
         lcd.print("%");
 
+        noInterrupts();
+        t=DHT.temperature;
+        interrupts();
+        
         if(tooHot==true){
-          startFan();
           blueLED();
+          startFan();
         }else{
           stopFan();
           greenLED();
@@ -144,11 +152,9 @@ void loop(){
           U0putchar('l');
           U0putchar(':');
           char first = waterSensorVal/100 + '0';
-          char second = waterSensorVal/10 + '0';
+          char second = (waterSensorVal/10)%10 + '0';
           char third = waterSensorVal%10 + '0';
-          if(second>'9'){
-            second = second-9;
-          }
+          
           U0putchar(' ');
           U0putchar(first);
           U0putchar(second);
@@ -165,7 +171,7 @@ void loop(){
               lcd.setCursor(0,0);
               lcd.print("ERROR: Water low");
               lcd.setCursor(0,1);
-              lcd.print("Add water and reset");
+              lcd.print("Add water, reset");
               if(*pinF & 0b00001000){
                 reset = true;
               }
@@ -193,7 +199,7 @@ void loop(){
           lcd.clear();
           lcd.setCursor(0,0);
           lcd.print("System Off");
-          delay(500);
+          delay(100);
           //off until button pressed again:
           if(*pinF & 0b01000000){
             on = true;
@@ -226,15 +232,15 @@ void U0putchar(unsigned char U0pdata){
 
 // fan motor/state:
 void startFan(){
-    *portA &= 0b11110111;
-    *portA |= 0b00100000;
+    *portA |= 0b00001000;
+    *portA &= 0b11011111;
     analogWrite(SPEEDPIN, 255);
 }
 void stopFan(){
-    *portA &= 0b11011111;
+    *portA &= 0b11010111;
 }
 void fanState(){
-  if(DHT.temperature > MAX_TEMP){
+  if(t > MAX_TEMP){
     tooHot = true;
     stateChange = true;
   }else{
@@ -287,4 +293,3 @@ void blueLED(){
   analogWrite(BLUE, 255);
   analogWrite(GREEN, 0);
 }
-
